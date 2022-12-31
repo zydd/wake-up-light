@@ -150,9 +150,9 @@ static void init_commands() {
 // }
 
 // void EspBase::setup() {
-    command("commit", []{
-        EEPROM.commit();
-    });
+    // command("commit", []{
+    //     EEPROM.commit();
+    // });
     command("restart", []{
         ESP.restart();
     });

@@ -19,12 +19,16 @@
 #define SECS_PER_YEAR (SECS_PER_WEEK * 52UL)
 
 
-uint8_t dither = 0;
 uint32_t timer_int_handle_time = 0;
 uint32_t loop_interval = 0;
 
 const int NUM_LEDS = 60;
 uint32_t led_arr[NUM_LEDS] = {0};
+uint32_t led_arr_lo[NUM_LEDS] = {0};
+uint8_t led_brightness[NUM_LEDS] = {0};
+uint8_t led_darkness[NUM_LEDS] = {0};
+uint8_t dither;
+// int8_t dither[NUM_LEDS] = {0};
 
 static double t = 0;
 static bool is_running;
@@ -228,13 +232,15 @@ void update_timer_interval() {
 }
 
 
+#define enable_timer()  timer1_enable(TIM_DIV1, TIM_EDGE, TIM_LOOP)
+
 void setup_timer() {
     ETS_FRC_TIMER1_INTR_ATTACH(timer_int_handler, NULL);
     ETS_FRC1_INTR_ENABLE();
 
     config_meta.on_change("led_update_freq", update_timer_interval);
 
-    timer1_enable(TIM_DIV1, TIM_EDGE, TIM_LOOP);
+    enable_timer();
 
     ArduinoOTA.onStart([]{
         timer1_disable();
@@ -311,6 +317,22 @@ void setup() {
         } else {
             t = 0;
         }
+    });
+
+    espbase::command("disable-timer", [](std::vector<std::vector<char>>&& args){
+        timer1_disable();
+    });
+
+    espbase::command("enable-timer", [](std::vector<std::vector<char>>&& args){
+        enable_timer();
+    });
+
+    espbase::command("commit", [](std::vector<std::vector<char>>&& args){
+        timer1_disable();
+        espbase::print("commit config notmr\n");
+        delay(20);
+        EEPROM.commit();
+        enable_timer();
     });
 
     setup_timer();
