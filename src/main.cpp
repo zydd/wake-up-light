@@ -23,12 +23,8 @@ uint32_t timer_int_handle_time = 0;
 uint32_t loop_interval = 0;
 
 const int NUM_LEDS = 60;
-uint32_t led_arr[NUM_LEDS] = {0};
-uint32_t led_arr_lo[NUM_LEDS] = {0};
-uint8_t led_brightness[NUM_LEDS] = {0};
-uint8_t led_darkness[NUM_LEDS] = {0};
-uint8_t dither;
-// int8_t dither[NUM_LEDS] = {0};
+static uint16_t led_color[NUM_LEDS][3];  // RGB
+
 
 static double t = 0;
 static bool is_running;
@@ -58,7 +54,7 @@ struct Config : espbase::config {
     member<uint8_t>     led_count       = {&config_meta, "led_count",       60};
     member<bool>        builtin_led     = {&config_meta, "builtin_led",     false};
     member<uint16_t>    animation_speed = {&config_meta, "animation_speed", 0x0100};
-    member<uint8_t>     led_dither_mask = {&config_meta, "led_dither_mask", 0x00};
+    member<uint8_t>     led_dither_max  = {&config_meta, "led_dither_max",  0x00};
     member<uint16_t>    duration        = {&config_meta, "duration",        90 * 60};
     member<uint16_t>    variation       = {&config_meta, "variation",       0x0100};
     member<uint8_t>     max_progression_night   = {&config_meta, "max_progression_night",   0x40};  // 0x40 / 0xff ~= 0.25
@@ -123,7 +119,7 @@ void reset_strip_protocol() {
 
 void calc_colors() {
     auto hour = timeClient.getHours();
-    auto max_brightness = (hour >= 4 && hour <= 16) ? config.led_brightness.value : 30;
+    auto max_brightness = (hour >= 4 && hour <= 16) ? config.led_brightness.value : 10;
     float max_progression = (hour >= 4 && hour <= 16) ? 1.0f : float(config.max_progression_night) / 0xff;
 
     float st = t * config.animation_speed.value / 0x0100;
@@ -134,30 +130,33 @@ void calc_colors() {
 
         float color = 0;
 
-        // float f1 = sqrtf(sinf(2 * PI * (x * 2 - t * 0.5)) * 0.5 + 0.5);
+        // float f1 = sqrtf(sinf(2 * PI * (x * 2 - st * 0.5)) * 0.5 + 0.5);
         // f1 = 1;
         float f2 = sqrtf(sinf(2 * PI * (x * 5 - st * 0.04)) * 0.5 + 0.5);
         float f3 = sqrtf(sinf(2 * PI * (x * 11 + st * 0.1)) * 0.5 + 0.5);
 
         // color = min(min(f1, f2), f3);
         color = min(f2, f3);
+        // color = i / 59.0;
 
         if (color < 0)
             color = 0;
         else if (color > 1)
             color = 1;
 
-        float r = color * min(2.5f * t10, 1.0f);
-        float g = color * t10;
-        float b = color * min(t10 < 0.5f ? 0.5f * t10 : 1.5f * t10 - 0.5f, 1.0f);
-        led_arr[i] =
-            (uint8_t(g * max_brightness) << 16)
-            | (uint8_t(r * max_brightness) << 8)
-            | uint8_t(b * max_brightness);
+        float r = max_brightness * color * min(2.5f * t10, 1.0f);
+        float g = max_brightness * color * t10;
+        float b = max_brightness * color * min(t10 < 0.5f ? 0.5f * t10 : 1.5f * t10 - 0.5f, 1.0f);
+
+        led_color[i][0] = r * 0x100;
+        led_color[i][1] = g * 0x100;
+        led_color[i][2] = b * 0x100;
     }
 
     for (unsigned i = config.led_count; i < NUM_LEDS; ++i) {
-        led_arr[i] = 0x000000;
+        for (unsigned j = 0; j < 3; ++j) {
+            led_color[i][j] = 0x0000;
+        }
     }
 }
 
@@ -169,14 +168,32 @@ void clear_strip() {
 
 
 void update_strip() {
+    static uint32_t leds[NUM_LEDS] = {0};
+    static int8_t dither[NUM_LEDS][3] = {0};
+
     for (unsigned i = 0; i < NUM_LEDS; ++i) {
-        if (((dither + i) & config.led_dither_mask))
-            write_led(0x000000);
-        else
-            write_led(led_arr[i]);
+        static uint8_t rgb[3];
+
+        for (unsigned j = 0; j < 3; ++j) {
+            rgb[j] = led_color[i][j] >> 8;
+            uint8_t fract = uint16_t(led_color[i][j] & 0xff) * config.led_dither_max >> 8;
+
+            if (dither[i][j] <= 0) {
+                dither[i][j] += fract;
+            } else {
+                dither[i][j] -= config.led_dither_max - fract;
+
+                if (rgb[j] < 0xff && fract > 0)
+                    rgb[j] += 1;
+            }
+        }
+
+        leds[i] = rgb[0] << 8 | rgb[1] << 16 | rgb[2];
     }
 
-    dither = (dither + 1) & config.led_dither_mask;
+    for (unsigned i = 0; i < NUM_LEDS; ++i) {
+        write_led(leds[i]);
+    }
 }
 
 
@@ -272,8 +289,8 @@ void setup() {
     pinMode(D3, OUTPUT);
     d3_lo();
 
-    espbase::command("led-off", []{ is_running = false; });
-    espbase::command("led-on", []{
+    espbase::command("off", []{ is_running = false; });
+    espbase::command("on", []{
         is_running = true;
         t = 0;
     });
